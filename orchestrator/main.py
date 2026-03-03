@@ -250,7 +250,12 @@ async def chat(req: ChatRequest, _=Depends(verify_token)):
             session["messages"].append(ui_to_anthropic(user_messages[-1]))
 
         # ── build full system prompt ──────────────────────────────────────────
-        full_system = build_system_prompt(req.systemPrompt, [s.dict() for s in req.enabledSkills])
+        full_system = build_system_prompt(
+            req.systemPrompt,
+            [s.dict() for s in req.enabledSkills],
+            org_id=req.orgId,
+            user_id=req.userId,
+        )
         tools = [RUN_COMMAND_TOOL, APP_ACTION_TOOL] if req.enabledSkills else [APP_ACTION_TOOL]
 
         # ── compact if session is getting long ────────────────────────────────
