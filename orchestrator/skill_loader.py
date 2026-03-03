@@ -42,12 +42,28 @@ def load_skill_doc(skill_name: str) -> str | None:
     return None
 
 
-def build_system_prompt(base_prompt: str, enabled_skills: list[dict]) -> str:
+def build_system_prompt(
+    base_prompt: str,
+    enabled_skills: list[dict],
+    org_id: str | None = None,
+    user_id: str | None = None,
+) -> str:
     """
     Combine the base system prompt from Next.js with SKILL.md content
     and tool usage instructions.
     """
     parts = [base_prompt.strip()]
+
+    if org_id or user_id:
+        ctx_lines = ["## Current User Context"]
+        if org_id:
+            ctx_lines.append(f"- **org_id**: `{org_id}`")
+        if user_id:
+            ctx_lines.append(f"- **user_id**: `{user_id}`")
+        ctx_lines.append(
+            "When running skill commands that accept `--org-id`, always pass the org_id above."
+        )
+        parts.append("\n".join(ctx_lines))
 
     skill_docs = []
     for skill in enabled_skills:
