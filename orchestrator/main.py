@@ -28,15 +28,15 @@ from pydantic import BaseModel
 
 from anthropic_client import (
     APP_ACTION_TOOL,
+    AnthropicStream,
     RUN_COMMAND_TOOL,
     call_anthropic,
     extract_text,
-    extract_tool_uses,
 )
 from executor import execute_command
 from session import clear_session, get_session, new_session, save_session
 from skill_loader import build_system_prompt
-from stream import stream_error, stream_text
+from stream import sse, stream_error
 
 logging.basicConfig(
     level=logging.INFO,
@@ -256,95 +256,111 @@ async def chat(req: ChatRequest, _=Depends(verify_token)):
             " (compacted)" if compacted else "",
         )
 
-        # ── AI tool loop ──────────────────────────────────────────────────────
+        # ── AI tool loop (all iterations stream live) ─────────────────────────
         try:
-            final_text = None
             collected_actions: list[dict] = []
+            step_id = 0
+
+            api_kwargs = dict(
+                base_url=req.anthropicConfig.baseURL,
+                auth_token=req.anthropicConfig.authToken,
+                system=full_system,
+                tools=tools,
+                model=model,
+            )
+
+            yield sse({"type": "start"})
 
             for iteration in range(MAX_LOOP):
                 logger.info("Loop iteration %d/%d for [%s]", iteration + 1, MAX_LOOP, session_id)
 
-                response = call_anthropic(
-                    base_url=req.anthropicConfig.baseURL,
-                    auth_token=req.anthropicConfig.authToken,
-                    system=full_system,
-                    messages=session["messages"],  # compacted if needed
-                    tools=tools,
-                    model=model,
+                # Every iteration streams from Anthropic in real-time
+                stream = AnthropicStream(messages=session["messages"], **api_kwargs)
+
+                yield sse({"type": "start-step"})
+                text_id = str(step_id)
+                yield sse({"type": "text-start", "id": text_id})
+
+                async for delta in stream:
+                    yield sse({"type": "text-delta", "id": text_id, "delta": delta})
+
+                yield sse({"type": "text-end", "id": text_id})
+                step_id += 1
+
+                stop_reason = stream.stop_reason
+                logger.info("Stop reason: %s (iteration %d)", stop_reason, iteration + 1)
+
+                # Persist assistant message to session
+                session["messages"].append(
+                    {"role": "assistant", "content": stream.content}
                 )
 
-                stop_reason = response.get("stop_reason", "end_turn")
-                logger.info("Stop reason: %s", stop_reason)
-
-                if stop_reason == "end_turn" or stop_reason not in ("tool_use", "end_turn"):
-                    # Final response — extract text and stream it
-                    final_text = extract_text(response)
-                    session["messages"].append(
-                        {"role": "assistant", "content": response.get("content", [])}
-                    )
+                if stop_reason != "tool_use":
+                    # ── end_turn: emit actions + finish ──────────────────────
+                    if collected_actions:
+                        for action in collected_actions:
+                            yield sse({"type": "data-action", "data": action})
+                    yield sse({"type": "finish-step"})
+                    yield sse({"type": "finish", "finishReason": "stop"})
+                    yield sse("[DONE]")
                     break
 
-                if stop_reason == "tool_use":
-                    tool_uses = extract_tool_uses(response)
-                    if not tool_uses:
-                        # Malformed — treat as end
-                        final_text = extract_text(response)
-                        session["messages"].append(
-                            {"role": "assistant", "content": response.get("content", [])}
-                        )
-                        break
+                # ── tool_use: extract and execute ────────────────────────────
+                tool_uses = stream.tool_uses
+                if not tool_uses:
+                    # Edge case: stop_reason=tool_use but no blocks found
+                    if collected_actions:
+                        for action in collected_actions:
+                            yield sse({"type": "data-action", "data": action})
+                    yield sse({"type": "finish-step"})
+                    yield sse({"type": "finish", "finishReason": "stop"})
+                    yield sse("[DONE]")
+                    break
 
-                    # Append assistant message (with tool_use blocks)
-                    session["messages"].append(
-                        {"role": "assistant", "content": response.get("content", [])}
-                    )
+                yield sse({"type": "finish-step"})
 
-                    # Execute all tool calls and collect results
-                    tool_results = []
-                    for tool in tool_uses:
-                        tool_id = tool["id"]
-                        tool_name = tool.get("name", "")
-                        inp = tool.get("input", {})
+                # ── Execute tool calls ───────────────────────────────────────
+                tool_results = []
+                for tool in tool_uses:
+                    tool_id = tool["id"]
+                    tool_name = tool.get("name", "")
+                    inp = tool.get("input", {})
 
-                        if tool_name == "app_action":
-                            # Collect the action — no subprocess, just acknowledge
-                            action = inp.get("action", "")
-                            collected_actions.append(inp)
-                            logger.info("App action collected: %r", inp)
-                            result = {"ok": True, "action": action}
-                        else:
-                            skill_name = inp.get("skill", "")
-                            command = inp.get("command", "")
-                            logger.info("Tool call: skill=%r command=%r", skill_name, command)
-                            result = execute_command(skill_name, command, enabled_names)
-                            logger.info("Tool result ok=%s", result.get("ok"))
+                    if tool_name == "app_action":
+                        collected_actions.append(inp)
+                        logger.info("App action collected: %r", inp)
+                        result = {"ok": True, "action": inp.get("action", "")}
+                    else:
+                        skill_name = inp.get("skill", "")
+                        command = inp.get("command", "")
+                        logger.info("Tool call: skill=%r command=%r", skill_name, command)
+                        result = execute_command(skill_name, command, enabled_names)
+                        logger.info("Tool result ok=%s", result.get("ok"))
 
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_id,
-                            "content": json.dumps(result, ensure_ascii=False, default=str),
-                        })
-
-                    session["messages"].append({
-                        "role": "user",
-                        "content": tool_results,
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": json.dumps(result, ensure_ascii=False, default=str),
                     })
+
+                session["messages"].append({"role": "user", "content": tool_results})
 
             else:
                 # Hit max iterations without end_turn
-                final_text = "I reached the maximum number of steps. Please try a simpler request."
+                yield sse({"type": "start-step"})
+                text_id = str(step_id)
+                yield sse({"type": "text-start", "id": text_id})
+                yield sse({"type": "text-delta", "id": text_id, "delta": "I reached the maximum number of steps. Please try a simpler request."})
+                yield sse({"type": "text-end", "id": text_id})
+                yield sse({"type": "finish-step"})
+                yield sse({"type": "finish", "finishReason": "stop"})
+                yield sse("[DONE]")
                 logger.warning("Max loop iterations reached for [%s]", session_id)
 
-            # ── save session & stream response ────────────────────────────────
             save_session(session_id, session)
-
-            text_to_stream = final_text or ""
-            async for chunk in stream_text(text_to_stream, actions=collected_actions or None):
-                yield chunk
 
         except Exception as exc:
             logger.exception("Error in chat loop for [%s]: %s", session_id, exc)
-            # Save whatever session state we have
             try:
                 save_session(session_id, session)
             except Exception:
