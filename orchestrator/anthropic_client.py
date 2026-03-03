@@ -1,10 +1,10 @@
 """
-Calls the Anthropic Messages API via the relay (non-streaming).
+Calls the Anthropic Messages API via the relay (non-streaming + streaming).
 """
 
 import json
 import logging
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -112,6 +112,135 @@ def call_anthropic(
         )
 
     return resp.json()
+
+
+class AnthropicStream:
+    """
+    Streams from the Anthropic Messages API.
+
+    Usage:
+        stream = AnthropicStream(base_url=..., ...)
+        async for text_delta in stream:
+            # forward delta to client
+            pass
+
+        # After iteration completes:
+        stream.stop_reason   # "end_turn" | "tool_use" | ...
+        stream.content       # list of content blocks for session persistence
+        stream.tool_uses     # list of tool_use blocks (if any)
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        auth_token: str,
+        system: str,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        model: str = DEFAULT_MODEL,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ):
+        self._url = base_url.rstrip("/") + "/messages"
+        self._payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": messages,
+            "stream": True,
+        }
+        if tools:
+            self._payload["tools"] = tools
+        self._headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {auth_token}",
+            "anthropic-version": "2023-06-01",
+            "x-session-id": "orchestrator",
+        }
+
+        # Populated during iteration
+        self.content: list[dict] = []
+        self.stop_reason: str = "end_turn"
+        self.tool_uses: list[dict] = []
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        """Yield text delta strings as they arrive. Populates self.content/stop_reason/tool_uses."""
+        current_block: dict | None = None
+        current_tool_input_json = ""
+
+        # Connect timeout is short; read timeout is long for streaming
+        stream_timeout = httpx.Timeout(connect=30, read=300, write=30, pool=30)
+        async with httpx.AsyncClient(timeout=stream_timeout) as client:
+            async with client.stream("POST", self._url, json=self._payload, headers=self._headers) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    raise RuntimeError(
+                        f"Anthropic API error {resp.status_code}: {body.decode()[:500]}"
+                    )
+
+                buffer = ""
+                async for raw_chunk in resp.aiter_text():
+                    buffer += raw_chunk
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+
+                        if not line or line.startswith("event:"):
+                            continue
+                        if not line.startswith("data: "):
+                            continue
+
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            continue
+
+                        try:
+                            event = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        etype = event.get("type", "")
+
+                        if etype == "content_block_start":
+                            block = event.get("content_block", {})
+                            btype = block.get("type", "")
+                            if btype == "text":
+                                current_block = {"type": "text", "text": ""}
+                                self.content.append(current_block)
+                            elif btype == "tool_use":
+                                current_block = {
+                                    "type": "tool_use",
+                                    "id": block.get("id", ""),
+                                    "name": block.get("name", ""),
+                                    "input": {},
+                                }
+                                current_tool_input_json = ""
+                                self.content.append(current_block)
+
+                        elif etype == "content_block_delta":
+                            delta = event.get("delta", {})
+                            dtype = delta.get("type", "")
+                            if dtype == "text_delta" and current_block and current_block["type"] == "text":
+                                text = delta.get("text", "")
+                                current_block["text"] += text
+                                yield text
+                            elif dtype == "input_json_delta" and current_block and current_block["type"] == "tool_use":
+                                current_tool_input_json += delta.get("partial_json", "")
+
+                        elif etype == "content_block_stop":
+                            if current_block and current_block["type"] == "tool_use":
+                                try:
+                                    current_block["input"] = json.loads(current_tool_input_json) if current_tool_input_json else {}
+                                except json.JSONDecodeError:
+                                    current_block["input"] = {}
+                                self.tool_uses.append(current_block)
+                            current_block = None
+                            current_tool_input_json = ""
+
+                        elif etype == "message_delta":
+                            delta = event.get("delta", {})
+                            if "stop_reason" in delta:
+                                self.stop_reason = delta["stop_reason"]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
