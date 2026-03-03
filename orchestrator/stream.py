@@ -17,7 +17,8 @@ import json
 from typing import AsyncIterator
 
 
-def _sse(data) -> str:
+def sse(data) -> str:
+    """Format a single SSE data line."""
     if data == "[DONE]":
         return "data: [DONE]\n\n"
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -29,32 +30,28 @@ async def stream_text(
     """
     Yield SSE events for a complete text response.
     Chunks the text into ~20-char pieces for a streaming feel.
-    If actions are provided they are emitted as AI SDK data events (2: prefix)
-    so useChat's data array receives them natively.
     """
     CHUNK = 20
 
-    yield _sse({"type": "start"})
-    yield _sse({"type": "start-step"})
-    yield _sse({"type": "text-start", "id": "0"})
+    yield sse({"type": "start"})
+    yield sse({"type": "start-step"})
+    yield sse({"type": "text-start", "id": "0"})
 
     for i in range(0, max(len(text), 1), CHUNK):
-        yield _sse({"type": "text-delta", "id": "0", "delta": text[i : i + CHUNK]})
+        yield sse({"type": "text-delta", "id": "0", "delta": text[i : i + CHUNK]})
 
-    yield _sse({"type": "text-end", "id": "0"})
+    yield sse({"type": "text-end", "id": "0"})
 
-    # Emit actions as native AI SDK data events before finish.
-    # The 2: prefix populates useChat's `data` array on the frontend.
     if actions:
         for action in actions:
-            yield _sse({"type": "data-action", "data": action})
+            yield sse({"type": "data-action", "data": action})
 
-    yield _sse({"type": "finish-step"})
-    yield _sse({"type": "finish", "finishReason": finish_reason})
-    yield _sse("[DONE]")
+    yield sse({"type": "finish-step"})
+    yield sse({"type": "finish", "finishReason": finish_reason})
+    yield sse("[DONE]")
 
 
 async def stream_error(message: str) -> AsyncIterator[str]:
     """Yield an error event followed by DONE."""
-    yield _sse({"type": "error", "error": message})
-    yield _sse("[DONE]")
+    yield sse({"type": "error", "error": message})
+    yield sse("[DONE]")
