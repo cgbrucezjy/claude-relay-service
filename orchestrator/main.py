@@ -279,12 +279,16 @@ async def chat(req: ChatRequest, _=Depends(verify_token)):
 
                 yield sse({"type": "start-step"})
                 text_id = str(step_id)
-                yield sse({"type": "text-start", "id": text_id})
+                has_text = False
 
                 async for delta in stream:
+                    if not has_text:
+                        yield sse({"type": "text-start", "id": text_id})
+                        has_text = True
                     yield sse({"type": "text-delta", "id": text_id, "delta": delta})
 
-                yield sse({"type": "text-end", "id": text_id})
+                if has_text:
+                    yield sse({"type": "text-end", "id": text_id})
                 step_id += 1
 
                 stop_reason = stream.stop_reason
