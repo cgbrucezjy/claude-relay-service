@@ -47,6 +47,8 @@ from executor import execute_command
 from session import clear_session, get_session, new_session, save_session
 from skill_loader import build_system_prompt
 from stream import sse, stream_error
+from mcp_config import collect_mcp_configs
+from mcp_manager import MCPManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -277,6 +279,24 @@ async def chat(req: ChatRequest, _=Depends(verify_token)):
         )
         tools = [RUN_COMMAND_TOOL, APP_ACTION_TOOL] if req.enabledSkills else [APP_ACTION_TOOL]
 
+        # ── MCP tools ─────────────────────────────────────────────────────────
+        mcp_mgr = None
+        if req.enabledSkills and MCPManager.available():
+            mcp_configs = collect_mcp_configs(enabled_names, req.skillConfigs)
+            if mcp_configs:
+                try:
+                    mcp_mgr = MCPManager()
+                    await mcp_mgr.initialize(mcp_configs)
+                    mcp_tools = mcp_mgr.get_anthropic_tools()
+                    if mcp_tools:
+                        tools.extend(mcp_tools)
+                        logger.info("Added %d MCP tools", len(mcp_tools))
+                except Exception as exc:
+                    logger.warning("MCP init failed, continuing without MCP: %s", exc)
+                    if mcp_mgr:
+                        await mcp_mgr.shutdown()
+                    mcp_mgr = None
+
         # ── compact if session is getting long ────────────────────────────────
         compacted = compact_session(
             session,
@@ -372,6 +392,10 @@ async def chat(req: ChatRequest, _=Depends(verify_token)):
                         collected_actions.append(inp)
                         logger.info("App action collected: %r", inp)
                         result = {"ok": True, "action": inp.get("action", "")}
+                    elif mcp_mgr and mcp_mgr.is_mcp_tool(tool_name):
+                        logger.info("MCP tool call: %s", tool_name)
+                        result = await mcp_mgr.call_tool(tool_name, inp)
+                        logger.info("MCP tool result ok=%s", result.get("ok"))
                     else:
                         skill_name = inp.get("skill", "")
                         command = inp.get("command", "")
@@ -409,6 +433,9 @@ async def chat(req: ChatRequest, _=Depends(verify_token)):
                 pass
             async for chunk in stream_error(str(exc)):
                 yield chunk
+        finally:
+            if mcp_mgr:
+                await mcp_mgr.shutdown()
 
     return StreamingResponse(
         event_stream(),
