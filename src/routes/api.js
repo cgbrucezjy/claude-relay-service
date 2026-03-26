@@ -1476,6 +1476,9 @@ async function handleMessagesRequest(req, res) {
 // 🚀 Claude API messages 端点 - /api/v1/messages
 router.post('/v1/messages', authenticateApiKey, handleMessagesRequest)
 
+// 🚀 Claude API messages 端点 - /api/messages (无 v1 前缀别名)
+router.post('/messages', authenticateApiKey, handleMessagesRequest)
+
 // 🚀 Claude API messages 端点 - /claude/v1/messages (别名)
 router.post('/claude/v1/messages', authenticateApiKey, handleMessagesRequest)
 
