@@ -84,7 +84,7 @@ def call_anthropic(
 
     Returns the parsed response dict, or raises on HTTP/network error.
     """
-    url = base_url.rstrip("/") + "/messages"
+    url = base_url.rstrip("/") + "/v1/messages"
 
     payload: dict[str, Any] = {
         "model": model,
@@ -143,7 +143,7 @@ class AnthropicStream:
         model: str = DEFAULT_MODEL,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ):
-        self._url = base_url.rstrip("/") + "/messages"
+        self._url = base_url.rstrip("/") + "/v1/messages"
         self._payload: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
