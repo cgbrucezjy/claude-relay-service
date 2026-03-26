@@ -37,6 +37,26 @@ class ConversationLogService {
       const messages = this._sanitizeMessages(requestBody?.messages)
       const responseText = this._extractResponseText(responseContent)
 
+      const listKey = `convlog:${keyId}:${sessionHash || 'default'}`
+      const client = redis.getClientSafe()
+
+      // 读取上一条记录，累加 session 维度用量
+      let prevSessionUsage = { inputTokens: 0, outputTokens: 0, requestCount: 0 }
+      try {
+        const prev = await client.lrange(listKey, 0, 0)
+        if (prev?.length) {
+          const prevRecord = JSON.parse(prev[0])
+          if (prevRecord.sessionUsage) {
+            prevSessionUsage = prevRecord.sessionUsage
+          }
+        }
+      } catch {
+        // 读取失败不影响记录
+      }
+
+      const currentInput = usage?.inputTokens || 0
+      const currentOutput = usage?.outputTokens || 0
+
       const record = {
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
@@ -55,13 +75,15 @@ class ConversationLogService {
           stopReason: stopReason || null
         },
         usage: {
-          inputTokens: usage?.inputTokens || 0,
-          outputTokens: usage?.outputTokens || 0
+          inputTokens: currentInput,
+          outputTokens: currentOutput
+        },
+        sessionUsage: {
+          inputTokens: prevSessionUsage.inputTokens + currentInput,
+          outputTokens: prevSessionUsage.outputTokens + currentOutput,
+          requestCount: prevSessionUsage.requestCount + 1
         }
       }
-
-      const listKey = `convlog:${keyId}:${sessionHash || 'default'}`
-      const client = redis.getClientSafe()
 
       await client
         .multi()
