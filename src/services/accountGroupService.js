@@ -180,12 +180,6 @@ class AccountGroupService {
         throw new Error('分组不存在')
       }
 
-      // 检查分组是否为空
-      const members = await this.getGroupMembers(groupId)
-      if (members.length > 0) {
-        throw new Error('分组内还有账户，无法删除')
-      }
-
       // 检查是否有API Key绑定此分组
       const boundApiKeys = await this.getApiKeysUsingGroup(groupId)
       if (boundApiKeys.length > 0) {
