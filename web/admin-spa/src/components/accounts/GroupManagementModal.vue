@@ -95,7 +95,9 @@
                           ? 'bg-blue-100 text-blue-700'
                           : group.platform === 'openai'
                             ? 'bg-gray-100 text-gray-700'
-                            : 'bg-cyan-100 text-cyan-700'
+                            : group.platform === 'ccr'
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-cyan-100 text-cyan-700'
                     ]"
                   >
                     {{
@@ -105,7 +107,9 @@
                           ? 'Gemini'
                           : group.platform === 'openai'
                             ? 'OpenAI'
-                            : 'Droid'
+                            : group.platform === 'ccr'
+                              ? 'CCR'
+                              : 'Droid'
                     }}
                   </span>
                 </div>
@@ -178,7 +182,11 @@
                   ? 'Claude'
                   : editForm.platform === 'gemini'
                     ? 'Gemini'
-                    : 'OpenAI'
+                    : editForm.platform === 'openai'
+                      ? 'OpenAI'
+                      : editForm.platform === 'ccr'
+                        ? 'CCR'
+                        : 'Droid'
               }}
               <span class="ml-2 text-xs text-gray-500">(不可修改)</span>
             </div>
@@ -259,6 +267,10 @@
                 <input v-model="createForm.platform" class="mr-2" type="radio" value="droid" />
                 <span class="text-sm text-gray-700 dark:text-gray-300">Droid</span>
               </label>
+              <label class="flex cursor-pointer items-center">
+                <input v-model="createForm.platform" class="mr-2" type="radio" value="ccr" />
+                <span class="text-sm text-gray-700 dark:text-gray-300">CCR</span>
+              </label>
             </div>
           </div>
 
@@ -323,7 +335,8 @@ const platformTabs = [
   { key: 'claude', label: 'Claude', color: 'purple' },
   { key: 'gemini', label: 'Gemini', color: 'blue' },
   { key: 'openai', label: 'OpenAI', color: 'gray' },
-  { key: 'droid', label: 'Droid', color: 'cyan' }
+  { key: 'droid', label: 'Droid', color: 'cyan' },
+  { key: 'ccr', label: 'CCR', color: 'green' }
 ]
 
 // 各平台分组数量
