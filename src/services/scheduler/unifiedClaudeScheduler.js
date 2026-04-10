@@ -1815,6 +1815,33 @@ class UnifiedClaudeScheduler {
             continue
           }
 
+          // 检查 CCR/MiniMax 账户的配额和过载状态
+          if (accountType === 'ccr') {
+            const isQuotaExceeded = await ccrAccountService.isAccountQuotaExceeded(account.id)
+            if (isQuotaExceeded) {
+              logger.info(`🚫 Skipping group member ${account.name} (${account.id}) due to CCR quota exceeded`)
+              continue
+            }
+            const isOverloaded = await ccrAccountService.isAccountOverloaded(account.id)
+            if (isOverloaded) {
+              logger.info(`🚫 Skipping group member ${account.name} (${account.id}) due to CCR overloaded`)
+              continue
+            }
+          }
+
+          if (accountType === 'minimax') {
+            const isQuotaExceeded = await minimaxAccountService.isAccountQuotaExceeded(account.id)
+            if (isQuotaExceeded) {
+              logger.info(`🚫 Skipping group member ${account.name} (${account.id}) due to MiniMax quota exceeded`)
+              continue
+            }
+            const isOverloaded = await minimaxAccountService.isAccountOverloaded(account.id)
+            if (isOverloaded) {
+              logger.info(`🚫 Skipping group member ${account.name} (${account.id}) due to MiniMax overloaded`)
+              continue
+            }
+          }
+
           if (accountType === 'claude-official' && isOpusRequest) {
             const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(
               account.id
