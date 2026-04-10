@@ -1795,7 +1795,7 @@ class UnifiedClaudeScheduler {
           accountType === 'claude-official'
             ? account.status !== 'error' && account.status !== 'blocked'
             : accountType === 'ccr'
-              ? !account.status || account.status === 'active'
+              ? true
               : account.status === 'active'
 
         if (isActive && status && isSchedulable(account.schedulable)) {
